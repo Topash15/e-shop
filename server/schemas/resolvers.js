@@ -31,7 +31,9 @@ const resolvers = {
     },
     // get shipment by id
     shipment: async (parent, args, context) => {
-      const shipment = await Shipment.findById(args._id).populate("shipmentItems");
+      const shipment = await Shipment.findById(args._id).populate(
+        "shipmentItems"
+      );
       return shipment;
     },
 
@@ -41,7 +43,9 @@ const resolvers = {
     },
     // get shipment by id
     shipmentItem: async (parent, args, context) => {
-      const shipmentItem = await ShipmentItem.findById(args._id).populate("product");
+      const shipmentItem = await ShipmentItem.findById(args._id).populate(
+        "product"
+      );
       return shipmentItem;
     },
   },
@@ -79,24 +83,152 @@ const resolvers = {
     },
 
     /** SHIPMENT MUTATIONS **/
+
     // create new shipment
     addShipment: async (parent, args, context) => {
       const shipment = await Shipment.create(args);
       return shipment;
     },
+
     // add item to shipment
     addItemToShipment: async (parent, args, context) => {
-      const shipment = await Shipment.findByIdAndUpdate(args._id,{
-        $push: { shipmentItems: args.shipmentItems}
-      }, {new: true}).populate('shipmentItems')
+      /** Request used to check if inventory is available */
+      // returns shipment item with product and product's inventory information
+      const inventory = await ShipmentItem.findById(args.shipmentItems)
+        .populate("product")
+        .populate({
+          path: "product",
+          populate: "inventory",
+        });
+      const totalAvailable = inventory.product.inventory.inventory;
+      const inventory_id = inventory.product.inventory._id.toString();
+      const requestedQuantity = inventory.quantity;
+
+      /** If available inventory is less than the requested quantity,
+       * delete the shipmentItem from the database
+       * and return an error message indicating Not enough inventory
+       */
+      if (totalAvailable < requestedQuantity) {
+        // removing invalid shipment items should keep the database clean of unused shipment items
+        const invalidShipmentItem = await ShipmentItem.findByIdAndDelete(
+          args.shipmentItems
+        );
+        return new Error("Not enough inventory available.");
+      }
+
+      // saves product id to string. used for comparison purposes
+      const product = inventory.product._id.toString();
+
+      /** Checks if product is already on shipment
+       * if it is already on shipment, add quantities
+       * else add to shipment
+       */
+      const currentShipmentItems = await Shipment.findById(args._id).populate(
+        "shipmentItems"
+      );
+      // loops through each existing shipment item in the shipment
+      // adds quantities if the product being added already exists
+      for (let i = 0; i < currentShipmentItems.shipmentItems.length; i++) {
+        if (
+          product === currentShipmentItems.shipmentItems[i].product.toString()
+        ) {
+          const existingQuantity =
+            currentShipmentItems.shipmentItems[i].quantity;
+          const newQuantity = existingQuantity + requestedQuantity;
+
+          const shipmentItem = await ShipmentItem.findByIdAndUpdate(
+            currentShipmentItems.shipmentItems[i]._id.toString(),
+            {
+              quantity: newQuantity,
+            }
+          );
+
+          /** Deletes the duplicate shipment item as the quantity has already been updated*/
+          const invalidShipmentItem = await ShipmentItem.findByIdAndDelete(
+            args.shipmentItems
+          );
+
+          /** Updates inventory quantity to reflect the added shipment amount*/
+          const remainingInventory = totalAvailable - requestedQuantity;
+          const inventoryUpdate = await Inventory.findByIdAndUpdate(
+            inventory_id,
+            {
+              inventory: remainingInventory,
+            }
+          );
+          return Shipment.findById(args._id).populate("shipmentItems");
+        }
+      }
+
+
+      /** if the item was not already in the shipment, add the shipment item to the shipment*/
+      const shipment = await Shipment.findByIdAndUpdate(
+        args._id,
+        {
+          $push: { shipmentItems: args.shipmentItems },
+        },
+        { new: true }
+      ).populate("shipmentItems");
+
+      /** Updates inventory quantity to reflect the added shipment amount*/
+      const remainingInventory = totalAvailable - requestedQuantity;
+      const inventoryUpdate = await Inventory.findByIdAndUpdate(inventory_id, {
+        inventory: remainingInventory,
+      });
       return shipment;
     },
     // remove item from shipment
     removeItemFromShipment: async (parent, args, context) => {
-      const shipment = await Shipment.findByIdAndUpdate(args._id,{
-        $pull: { shipmentItems: args.shipmentItems}
-      }, {new: true}).populate('shipmentItems')
-      return shipment;
+      /** Request used to check if inventory is available */
+      // returns shipment item with product and product's inventory information
+      const inventory = await ShipmentItem.findById(args.shipmentItems)
+        .populate("product")
+        .populate({
+          path: "product",
+          populate: "inventory",
+        });
+      const totalAvailable = inventory.product.inventory.inventory;
+      const requestedQuantity = inventory.quantity;
+      const product = inventory.product._id.toString();
+
+      /** Checks if product is already on shipment
+       * if it is already on shipment, add quantities
+       * else add to shipment
+       */
+      const currentShipmentItems = await Shipment.findById(args._id).populate(
+        "shipmentItems"
+      );
+      // loops through each existing shipment item in the shipment
+      // adds quantities if the product being added already exists
+      for (let i = 0; i < currentShipmentItems.shipmentItems.length; i++) {
+        if (
+          product === currentShipmentItems.shipmentItems[i].product.toString()
+        ) {
+          // quantity of product already listed in shipment
+          const existingQuantity =
+            currentShipmentItems.shipmentItems[i].quantity;
+          const newQuantity = existingQuantity - requestedQuantity;
+          /** the new quantity is less than or equal to zero, remove the item from the shipment entirely */
+          if (newQuantity <= 0) {
+            const shipment = await Shipment.findByIdAndUpdate(
+              args._id,
+              {
+                $pull: { shipmentItems: args.shipmentItems },
+              },
+              { new: true }
+            ).populate("shipmentItems");
+            return shipment;
+          }
+          /** if the quantity is a positive value, set as new quantity */
+          const shipmentItem = await ShipmentItem.findByIdAndUpdate(
+            currentShipmentItems.shipmentItems[i]._id.toString(),
+            {
+              quantity: newQuantity,
+            }
+          );
+          return Shipment.findById(args._id).populate("shipmentItems");
+        }
+      }
     },
 
     /** SHIPMENT ITEM MUTATIONS **/
@@ -107,13 +239,16 @@ const resolvers = {
     },
     // edit shipment item
     editShipmentItem: async (parent, args, context) => {
-      const item = await ShipmentItem.findByIdAndUpdate(args._id,{
-        product: args.product,
-        quantity: args.quantity
-      },
-      { new: true}).populate('product')
+      const item = await ShipmentItem.findByIdAndUpdate(
+        args._id,
+        {
+          product: args.product,
+          quantity: args.quantity,
+        },
+        { new: true }
+      ).populate("product");
       return item;
-    }
+    },
   },
 };
 
