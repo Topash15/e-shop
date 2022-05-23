@@ -13,9 +13,8 @@ const productSchema = new Schema({
     trim: true,
   },
   inventory: {
-    type: Number,
-    required: false,
-    default: 0,
+    type: Schema.Types.ObjectId,
+    ref: "Inventory"
   },
 });
 

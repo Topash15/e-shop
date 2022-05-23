@@ -6,10 +6,10 @@ const shipmentSchema = new Schema({
     type: Date,
     default: Date.now(),
   },
-  products: [
+  shipmentItems: [
     {
       type: Schema.Types.ObjectId,
-      ref: "Product",
+      ref: "ShipmentItem",
     },
   ],
 });
