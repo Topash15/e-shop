@@ -27,13 +27,13 @@ const resolvers = {
     /** SHIPMENT QUERIES **/
     // get all shipments
     shipments: async (parent, args, context) => {
-      return Shipment.find().populate("shipmentItems");
+      return Shipment.find()
+        .populate("shipmentItems");
     },
     // get shipment by id
     shipment: async (parent, args, context) => {
-      const shipment = await Shipment.findById(args._id).populate(
-        "shipmentItems"
-      );
+      const shipment = await Shipment.findById(args._id)
+      .populate("shipmentItems");
       return shipment;
     },
 
@@ -160,7 +160,6 @@ const resolvers = {
         }
       }
 
-
       /** if the item was not already in the shipment, add the shipment item to the shipment*/
       const shipment = await Shipment.findByIdAndUpdate(
         args._id,
@@ -179,7 +178,7 @@ const resolvers = {
     },
     // remove item from shipment
     removeItemFromShipment: async (parent, args, context) => {
-      /** Request used to check if inventory is available */
+      /** Request used to check current inventory */
       // returns shipment item with product and product's inventory information
       const inventory = await ShipmentItem.findById(args.shipmentItems)
         .populate("product")
@@ -187,8 +186,16 @@ const resolvers = {
           path: "product",
           populate: "inventory",
         });
+
+      // current available inventory
       const totalAvailable = inventory.product.inventory.inventory;
+
+      // inventory id used for updating inventory after change in quantity
+      const inventory_id = inventory.product.inventory._id.toString();
+
+      // quantity requested by the removal request
       const requestedQuantity = inventory.quantity;
+      // shipment item product id as a string
       const product = inventory.product._id.toString();
 
       /** Checks if product is already on shipment
@@ -198,8 +205,8 @@ const resolvers = {
       const currentShipmentItems = await Shipment.findById(args._id).populate(
         "shipmentItems"
       );
-      // loops through each existing shipment item in the shipment
-      // adds quantities if the product being added already exists
+      // loops through each existing shipment items in the shipment
+      // subtracts quantities if the product being added already exists
       for (let i = 0; i < currentShipmentItems.shipmentItems.length; i++) {
         if (
           product === currentShipmentItems.shipmentItems[i].product.toString()
@@ -208,7 +215,10 @@ const resolvers = {
           const existingQuantity =
             currentShipmentItems.shipmentItems[i].quantity;
           const newQuantity = existingQuantity - requestedQuantity;
-          /** the new quantity is less than or equal to zero, remove the item from the shipment entirely */
+          /** the new quantity is less than or equal to zero, remove the item from the shipment entirely
+           * as you cannot have negative quantity
+           * returns new shipment
+           */
           if (newQuantity <= 0) {
             const shipment = await Shipment.findByIdAndUpdate(
               args._id,
@@ -217,6 +227,16 @@ const resolvers = {
               },
               { new: true }
             ).populate("shipmentItems");
+
+            /** Adds the items removed from the shipment to the overall inventory */
+            // Adds existing quantity to inventory as the requested quantity is greater than the existing
+            const remainingInventory = totalAvailable + existingQuantity;
+            const inventoryUpdate = await Inventory.findByIdAndUpdate(
+              inventory_id,
+              {
+                inventory: remainingInventory,
+              }
+            );
             return shipment;
           }
           /** if the quantity is a positive value, set as new quantity */
@@ -226,6 +246,16 @@ const resolvers = {
               quantity: newQuantity,
             }
           );
+
+          /** Adds the items removed from the shipment to the overall inventory */
+          const remainingInventory = totalAvailable + requestedQuantity;
+          const inventoryUpdate = await Inventory.findByIdAndUpdate(
+            inventory_id,
+            {
+              inventory: remainingInventory,
+            }
+          );
+
           return Shipment.findById(args._id).populate("shipmentItems");
         }
       }
@@ -247,6 +277,10 @@ const resolvers = {
         },
         { new: true }
       ).populate("product");
+      return item;
+    },
+    deleteShipmentItem: async (parent, args, context) => {
+      const item = await ShipmentItem.findByIdAndDelete(args._id);
       return item;
     },
   },

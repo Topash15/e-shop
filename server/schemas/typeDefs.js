@@ -61,6 +61,8 @@ const typeDefs = gql`
     addShipmentItem(product: ID, quantity: Int): ShipmentItem
 
     editShipmentItem(_id: ID, product: ID, quantity: Int): ShipmentItem
+
+    deleteShipmentItem(_id: ID!): ShipmentItem
   }
 `;
 
